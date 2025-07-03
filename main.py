@@ -211,4 +211,23 @@ async def chatcontext_clear(guild):
 
 
 
+@bot.event
+async def on_message(message: discord.Message):
+    # Ignore messages from bots (including itself)
+    if message.author.bot:
+        return
+
+    # Check if the bot was mentioned
+    if bot.user in message.mentions:
+        # Remove the mention from the message content
+        text = message.content.replace(f'<@{bot.user.id}>', '').strip()
+        if text:
+            # Call the chat command logic directly
+            ctx = await bot.get_context(message)
+            await chat(ctx, text=text)
+    else:
+        await bot.process_commands(message)
+
+
+
 bot.run(TOKEN)
