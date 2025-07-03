@@ -73,71 +73,90 @@ async def clear(ctx : discord.Interaction):
 
 
 
-def _remove_mention(text, bot_user_id):
-    return text.replace(f'<@{bot_user_id}>', '').strip()
+@bot.command(name="chat", description="Chat with me.")
+@commands.cooldown(1, 60, commands.BucketType.guild)  
+async def chat(ctx : discord.Message, *, text):
+    try:
+        text = text.lower()
+        author = ctx.author.display_name
+        chatcontext = await get_guild_x(ctx.guild.id, "chatcontext")
 
-async def build_context_from_history(channel, bot_user, limit=20):
-    messages = []
-    async for msg in channel.history(limit=limit, oldest_first=True):
-        if msg.author.bot and msg.author != bot_user:
-            continue
-        role = "assistant" if msg.author == bot_user else "user"
-        messages.append({"role": role, "content": msg.content})
-    return messages
-
+        if not chatcontext:
+            chatcontext = []
 
 
-@bot.event
-async def on_message(message: discord.Message):
-    # Ignore messages from bots (including itself)
-    if message.author.bot:
-        return
+        prmpt = "You are a funny and helpful chatbot."
+        messages = [{"role": "system", "content": prmpt}]      
 
-    # Check if the bot was mentioned
-    if bot.user in message.mentions:
-        text = _remove_mention(message.content, bot.user.id)
-        if text:
-            # Build context from last 20 messages
-            context_messages = await build_context_from_history(message.channel, bot.user, limit=20)
-            context_messages.append({"role": "user", "content": text})
+        if len(chatcontext) > 0:
+            if len(chatcontext) > 6:
+                    if len(chatcontext) >= 500: 
+                        await chatcontext_pop(ctx.guild.id, 500)         
+                    									# we keep 500 in db but only use 6    
+                    chatcontext = chatcontext[len(chatcontext)-6:len(chatcontext)]
+            for mesg in chatcontext:   
 
-            prmpt = "You are a funny and helpful chatbot."
-            messages = [{"role": "system", "content": prmpt}] + context_messages
 
-            try:
-                response = await aclient.chat.completions.create(
-                    model="gpt-4o",
-                    messages=messages,
-                    user=str(message.author.id)
-                )
-                await asyncio.sleep(0.1)
+                mesg = mesg.replace( '\\"','"').replace( "\'","'")
+                mesg = mesg.split(":",1)
 
-                choice = response.choices[0]
-                finish_reason = choice.finish_reason
-                message_content = choice.message.content.strip()
-
-                if finish_reason in ["stop", "length"]:
-                    activity = discord.Activity(name=f"{message.author.display_name}", type=discord.ActivityType.listening)
-                    await bot.change_presence(status=discord.Status.online, activity=activity)
-
-                    async with message.channel.typing():
-                        for i in range(0, len(message_content), 2000): 
-                            if i == 0:
-                                await message.reply(message_content[i:i+2000])
-                            else:
-                                await message.channel.send(message_content[i:i+2000])
-
-                    print(f'[mention] {message.guild.name} | {message.author.display_name}: {text}')
-                    print(f'{bot.user}: {message_content}')
+                if mesg[0].lower == 'bot' or mesg[0].lower == 'assistant': 
+                    mesg[0] = "assistant"
                 else:
-                    print(f'[mention] {message.guild.name} | {message.author.display_name}: {text}')
-                    print(f'bot: ERROR')
+                    mesg[0] = "user"
+                messages.append({"role": mesg[0], "content": mesg[1]})
 
-            except Exception as e:
-                await message.reply("Error")
-                print(f"mention THREW: {e}")
-    else:
-        await bot.process_commands(message)
+            messages.append({"role": "user", "content": text})
+
+
+
+        elif not len(chatcontext) > 0:
+            messages.append({"role": "user", "content": text})
+
+
+        response = await aclient.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            user=str(ctx.author.id)
+        )
+        await asyncio.sleep(0.1)
+
+        # New: Access response as object, not dict
+        choice = response.choices[0]
+        finish_reason = choice.finish_reason
+        message_content = choice.message.content.strip()
+
+        if finish_reason in ["stop", "length"]:
+            activity = discord.Activity(name=f"{author}", type=discord.ActivityType.listening)
+            await bot.change_presence(status=discord.Status.online, activity=activity)
+
+            async with ctx.channel.typing():
+                for i in range(0, len(message_content), 2000): 
+                    if i == 0:
+                        await ctx.reply(message_content[i:i+2000])
+                    else:
+                        await ctx.channel.send(message_content[i:i+2000])
+
+            await chatcontext_append(ctx.guild.id, f'{author}: {text}')
+            await chatcontext_append(ctx.guild.id, f'bot: {message_content}')
+            print(f'[!chat] {ctx.guild.name} | {author}: {text}')
+            print(f'{bot.user}: {message_content}')
+
+        else:
+            print(f'[!chat] {ctx.guild.name} | {author}: {text}')
+            print(f'bot: ERROR')
+
+
+    except Exception as e:
+        await ctx.reply("Error")
+        print(f"!chat THREW: {e}")
+
+
+
+@chat.error
+async def chat_error(ctx, error):
+	if isinstance(error, commands.CommandOnCooldown):	
+            await ctx.reply(f"Chatting too fast! {round(error.retry_after, 2)} seconds left")
 
 
 
@@ -189,3 +208,26 @@ async def chatcontext_clear(guild):
         await con.execute(f"UPDATE context SET chatcontext=ARRAY{chatcontext}::text[] WHERE id = {guild}")
 
     return await get_guild_x(guild, "chatcontext")
+
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    # Ignore messages from bots (including itself)
+    if message.author.bot:
+        return
+
+    # Check if the bot was mentioned
+    if bot.user in message.mentions:
+        # Remove the mention from the message content
+        text = message.content.replace(f'<@{bot.user.id}>', '').strip()
+        if text:
+            # Call the chat command logic directly
+            ctx = await bot.get_context(message)
+            await chat(ctx, text=text)
+    else:
+        await bot.process_commands(message)
+
+
+
+bot.run(TOKEN)
