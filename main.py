@@ -2,10 +2,11 @@ import os, json, logging, asyncpg, asyncio
 
 import discord
 from discord.ext import commands
-import openai
+from openai import AsyncOpenAI
+
+aclient = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 
-openai.api_key =        os.getenv('OPENAI_API_KEY')
 TOKEN =                 os.getenv('DISCORD_TOKEN')
 PG_USER =               os.getenv('PGUSER')
 PG_PW =                 os.getenv('PGPASSWORD')
@@ -27,7 +28,7 @@ async def on_ready():
     logger = logging.getLogger('discord')
     logger.setLevel(logging.DEBUG)    
     print(f'{bot.user} is connected to the following guild(s):')
-        
+
     for guild in bot.guilds:
         print(f'{guild.name} (id: {guild.id})')
 
@@ -40,7 +41,7 @@ async def on_guild_join(guild:discord.Guild):
         await guild.leave()
         print(f"[X][X] Blocked {guild.name}")
         return
-    
+
     else:
         async with bot.pool.acquire() as con:   
             await con.execute(f'''CREATE TABLE IF NOT EXISTS context (
@@ -48,11 +49,11 @@ async def on_guild_join(guild:discord.Guild):
                     id              BIGINT  PRIMARY KEY NOT NULL,     
                     chatcontext     TEXT  []
                     )''')
-            
+
             await con.execute(f'INSERT INTO context(id) VALUES({guild.id}) ON CONFLICT DO NOTHING')
-		
+
         print(f"added to {guild}")
-        
+
 
 
 @bot.event
@@ -79,14 +80,14 @@ async def chat(ctx : discord.Message, *, text):
         text = text.lower()
         author = ctx.author.display_name
         chatcontext = await get_guild_x(ctx.guild.id, "chatcontext")
-        
+
         if not chatcontext:
             chatcontext = []
-            
-        
+
+
         prmpt = "You are a funny and helpful chatbot."
         messages = [{"role": "system", "content": prmpt}]      
-        
+
         if len(chatcontext) > 0:
             if len(chatcontext) > 6:
                     if len(chatcontext) >= 500: 
@@ -94,8 +95,8 @@ async def chat(ctx : discord.Message, *, text):
                     									# we keep 500 in db but only use 6    
                     chatcontext = chatcontext[len(chatcontext)-6:len(chatcontext)]
             for mesg in chatcontext:   
-                
-                
+
+
                 mesg = mesg.replace( '\\"','"').replace( "\'","'")
                 mesg = mesg.split(":",1)
 
@@ -106,26 +107,24 @@ async def chat(ctx : discord.Message, *, text):
                 messages.append({"role": mesg[0], "content": mesg[1]})
 
             messages.append({"role": "user", "content": text})
-                
-            
+
+
 
         elif not len(chatcontext) > 0:
             messages.append({"role": "user", "content": text})
 
 
-        response = await openai.ChatCompletion.acreate(
-            model="gpt-4",
-            messages= messages,
-            user = str(ctx.author.id)
-    )
+        response = await aclient.chat.completions.create(model="gpt-4",
+        messages= messages,
+        user = str(ctx.author.id))
         await asyncio.sleep(0.1)
 
-        
+
         if response["choices"][0]["finish_reason"] in ["stop","length"]:
             activity = discord.Activity(name=f"{author}", type=discord.ActivityType.listening)
             await bot.change_presence(status=discord.Status.online, activity=activity)
-            
-            
+
+
             message_content = response["choices"][0]["message"]["content"].strip()
             async with ctx.channel.typing():
                 for i in range(0, len(message_content), 2000): 
@@ -147,7 +146,7 @@ async def chat(ctx : discord.Message, *, text):
     except Exception as e:
         await ctx.reply("Error")
         print(f"!chat THREW: {e}")
-        
+
 
 
 @chat.error
@@ -164,7 +163,7 @@ async def get_guild_x(guild, x):
 
     except Exception as e:
         print(f'get_guild_x: {e}')
-        
+
 
 
 
@@ -172,12 +171,12 @@ async def set_guild_x(guild, x, val):
         try:
             async with bot.pool.acquire() as con:
                 await con.execute(f"UPDATE context SET {x} = '{val}' WHERE id = {guild}")
-            
+
             return await get_guild_x(guild,x)
 
         except Exception as e:
             print(f'set_guild_x threw {e}')
-            
+
 
 
 
@@ -190,9 +189,9 @@ async def chatcontext_append(guild, what):
 
 async def chatcontext_pop(guild, what = 5):
     chatcontext = list(await get_guild_x(guild, "chatcontext"))
-    
+
     chatcontextnew = chatcontext[len(chatcontext)-what:len(chatcontext)]
-    
+
     await chatcontext_clear(guild)
     for mesg in chatcontextnew:
         await chatcontext_append(guild, mesg)
