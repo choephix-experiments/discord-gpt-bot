@@ -114,18 +114,22 @@ async def chat(ctx : discord.Message, *, text):
             messages.append({"role": "user", "content": text})
 
 
-        response = await aclient.chat.completions.create(model="gpt-4",
-        messages= messages,
-        user = str(ctx.author.id))
+        response = await aclient.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            user=str(ctx.author.id)
+        )
         await asyncio.sleep(0.1)
 
+        # New: Access response as object, not dict
+        choice = response.choices[0]
+        finish_reason = choice.finish_reason
+        message_content = choice.message.content.strip()
 
-        if response["choices"][0]["finish_reason"] in ["stop","length"]:
+        if finish_reason in ["stop", "length"]:
             activity = discord.Activity(name=f"{author}", type=discord.ActivityType.listening)
             await bot.change_presence(status=discord.Status.online, activity=activity)
 
-
-            message_content = response["choices"][0]["message"]["content"].strip()
             async with ctx.channel.typing():
                 for i in range(0, len(message_content), 2000): 
                     if i == 0:
@@ -134,9 +138,9 @@ async def chat(ctx : discord.Message, *, text):
                         await ctx.channel.send(message_content[i:i+2000])
 
             await chatcontext_append(ctx.guild.id, f'{author}: {text}')
-            await chatcontext_append(ctx.guild.id,f'bot: {str(response["choices"][0]["message"]["content"].strip())}')
+            await chatcontext_append(ctx.guild.id, f'bot: {message_content}')
             print(f'[!chat] {ctx.guild.name} | {author}: {text}')
-            print(f'{bot.user}: {str(response["choices"][0]["message"]["content"].strip())}')
+            print(f'{bot.user}: {message_content}')
 
         else:
             print(f'[!chat] {ctx.guild.name} | {author}: {text}')
